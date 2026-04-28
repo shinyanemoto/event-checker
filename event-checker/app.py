@@ -12,6 +12,7 @@ from difflib import ndiff
 
 BASE_DIR = Path(__file__).resolve().parent
 SOURCES_FILE = Path(os.environ.get("SOURCES_PATH", BASE_DIR / "sources.json"))
+SETTINGS_FILE = Path(os.environ.get("SETTINGS_PATH", BASE_DIR / "settings.json"))
 REQUEST_TIMEOUT = 15
 EXCLUDE_KEYWORDS = [
     "Copyright",
@@ -19,7 +20,7 @@ EXCLUDE_KEYWORDS = [
     "ログイン",
     "お問い合わせ",
 ]
-PRIORITY_KEYWORDS = [
+DEFAULT_PRIORITY_KEYWORDS = [
     "募集",
     "開催",
     "イベント",
@@ -64,6 +65,36 @@ def save_sources(sources):
         json.dump(sources, file, ensure_ascii=False, indent=2)
 
 
+def load_settings():
+    if not SETTINGS_FILE.exists():
+        save_settings({"priority_keywords": DEFAULT_PRIORITY_KEYWORDS})
+        return {"priority_keywords": DEFAULT_PRIORITY_KEYWORDS.copy()}
+
+    try:
+        with SETTINGS_FILE.open("r", encoding="utf-8") as file:
+            settings = json.load(file)
+    except (json.JSONDecodeError, OSError):
+        settings = {}
+
+    priority_keywords = settings.get("priority_keywords", DEFAULT_PRIORITY_KEYWORDS)
+    cleaned_keywords = []
+    for keyword in priority_keywords:
+        normalized = str(keyword).strip()
+        if normalized and normalized not in cleaned_keywords:
+            cleaned_keywords.append(normalized)
+
+    if not cleaned_keywords:
+        cleaned_keywords = DEFAULT_PRIORITY_KEYWORDS.copy()
+
+    return {"priority_keywords": cleaned_keywords}
+
+
+def save_settings(settings):
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with SETTINGS_FILE.open("w", encoding="utf-8") as file:
+        json.dump(settings, file, ensure_ascii=False, indent=2)
+
+
 def fetch_page_text(url):
     response = requests.get(
         url,
@@ -89,7 +120,7 @@ def calculate_hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def extract_diff(old_text, new_text):
+def extract_diff(old_text, new_text, priority_keywords):
     added_lines = []
     seen = set()
 
@@ -110,11 +141,11 @@ def extract_diff(old_text, new_text):
 
     priority_lines = [
         line for line in added_lines
-        if any(keyword in line for keyword in PRIORITY_KEYWORDS)
+        if any(keyword in line for keyword in priority_keywords)
     ]
     normal_lines = [
         line for line in added_lines
-        if not any(keyword in line for keyword in PRIORITY_KEYWORDS)
+        if not any(keyword in line for keyword in priority_keywords)
     ]
 
     return priority_lines + normal_lines
@@ -125,12 +156,21 @@ def ensure_sources_file():
         save_sources([])
 
 
+def ensure_settings_file():
+    if not SETTINGS_FILE.exists():
+        save_settings({"priority_keywords": DEFAULT_PRIORITY_KEYWORDS})
+
+
 def build_status_message(requested_status):
     status_map = {
         "added": "URLを登録しました。",
+        "deleted": "URLを削除しました。",
         "checked": "差分チェックを実行しました。",
         "empty": "名前とURLを入力してください。",
         "duplicate": "同じURLはすでに登録されています。",
+        "keyword_added": "重要キーワードを追加しました。",
+        "keyword_empty": "重要キーワードを入力してください。",
+        "keyword_duplicate": "同じ重要キーワードはすでに登録されています。",
     }
     return status_map.get(requested_status, "")
 
@@ -138,9 +178,16 @@ def build_status_message(requested_status):
 @app.route("/", methods=["GET"])
 def index():
     ensure_sources_file()
+    ensure_settings_file()
     sources = load_sources()
+    settings = load_settings()
     message = build_status_message(request.args.get("status", ""))
-    return render_template("index.html", sources=sources, message=message)
+    return render_template(
+        "index.html",
+        sources=sources,
+        priority_keywords=settings["priority_keywords"],
+        message=message,
+    )
 
 
 @app.route("/add", methods=["POST"])
@@ -172,10 +219,44 @@ def add_source():
     return redirect(url_for("index", status="added"))
 
 
+@app.route("/delete", methods=["POST"])
+def delete_source():
+    ensure_sources_file()
+    sources = load_sources()
+
+    url = request.form.get("url", "").strip()
+    updated_sources = [source for source in sources if source["url"] != url]
+
+    if len(updated_sources) != len(sources):
+        save_sources(updated_sources)
+        return redirect(url_for("index", status="deleted"))
+
+    return redirect(url_for("index"))
+
+
+@app.route("/keywords/add", methods=["POST"])
+def add_keyword():
+    ensure_settings_file()
+    settings = load_settings()
+
+    keyword = request.form.get("keyword", "").strip()
+    if not keyword:
+        return redirect(url_for("index", status="keyword_empty"))
+
+    if keyword in settings["priority_keywords"]:
+        return redirect(url_for("index", status="keyword_duplicate"))
+
+    settings["priority_keywords"].append(keyword)
+    save_settings(settings)
+    return redirect(url_for("index", status="keyword_added"))
+
+
 @app.route("/check", methods=["POST"])
 def check_sources():
     ensure_sources_file()
+    ensure_settings_file()
     sources = load_sources()
+    settings = load_settings()
 
     for source in sources:
         checked_at = datetime.now(timezone.utc).isoformat()
@@ -189,7 +270,7 @@ def check_sources():
             if not old_text:
                 source["last_diff"] = ["初回チェック完了"]
             elif old_hash != new_hash:
-                diff_lines = extract_diff(old_text, new_text)
+                diff_lines = extract_diff(old_text, new_text, settings["priority_keywords"])
                 source["last_diff"] = diff_lines or ["変更はありましたが表示対象の差分はありません"]
             else:
                 source["last_diff"] = []
@@ -209,6 +290,7 @@ def check_sources():
 
 
 ensure_sources_file()
+ensure_settings_file()
 
 
 if __name__ == "__main__":

@@ -154,6 +154,36 @@
             background: #171717;
         }
 
+        .danger-button {
+            background: #8f3d32;
+            padding: 10px 16px;
+            font-size: 0.92rem;
+        }
+
+        .danger-button:hover {
+            background: #6f2b22;
+        }
+
+        .keyword-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .keyword-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: #f4e6df;
+            color: var(--accent-dark);
+            font-weight: 700;
+            font-size: 0.92rem;
+        }
+
         .source-list {
             display: grid;
             gap: 16px;
@@ -276,6 +306,25 @@
             </div>
 
             <div class="card">
+                <h2>重要キーワード登録</h2>
+                <form method="POST" action="/keywords/add">
+                    <div>
+                        <label for="keyword">重要キーワード</label>
+                        <input id="keyword" name="keyword" type="text" placeholder="例: 先着" required>
+                    </div>
+                    <button type="submit">追加する</button>
+                </form>
+                <div class="meta">
+                    現在の優先キーワード
+                </div>
+                <ul class="keyword-list">
+                    {% for keyword in priority_keywords %}
+                        <li class="keyword-chip">{{ keyword }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <div class="card">
                 <h2>差分チェック</h2>
                 <p class="empty">
                     登録済みURLをまとめて取得して、前回との差分を抽出します。
@@ -304,6 +353,10 @@
                                         <h3 class="source-title">■ {{ source["name"] }}</h3>
                                         <a class="source-link" href="{{ source['url'] }}" target="_blank" rel="noopener noreferrer">{{ source["url"] }}</a>
                                     </div>
+                                    <form method="POST" action="/delete">
+                                        <input type="hidden" name="url" value="{{ source['url'] }}">
+                                        <button class="danger-button" type="submit">削除</button>
+                                    </form>
                                 </div>
                                 <div class="meta">
                                     最終チェック: {{ source["last_checked"] or "未実行" }}<br>
