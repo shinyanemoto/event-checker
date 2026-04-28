@@ -236,6 +236,49 @@
             line-height: 1.6;
         }
 
+        .thumbnail-block {
+            margin-top: 14px;
+        }
+
+        .thumbnail-frame {
+            overflow: hidden;
+            border-radius: 18px;
+            border: 1px solid var(--line);
+            background:
+                linear-gradient(135deg, rgba(195, 95, 59, 0.08), rgba(255, 255, 255, 0.96));
+        }
+
+        .thumbnail-image {
+            display: block;
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            object-position: top center;
+        }
+
+        .thumbnail-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 160px;
+            padding: 20px;
+            color: var(--muted);
+            line-height: 1.7;
+            text-align: center;
+        }
+
+        .thumbnail-note {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+
+        .thumbnail-error {
+            color: #8f3d32;
+            font-weight: 700;
+        }
+
         .diff-box {
             margin-top: 14px;
             padding: 14px 16px;
@@ -394,6 +437,24 @@
                                 <div class="meta">
                                     最終チェック: {{ source["last_checked"] or "未実行" }}<br>
                                     ハッシュ: {{ source["last_hash"][:12] ~ "..." if source["last_hash"] else "未生成" }}
+                                </div>
+
+                                <div class="thumbnail-block">
+                                    <div class="thumbnail-frame">
+                                        {% if source["has_screenshot"] %}
+                                            <img class="thumbnail-image" src="{{ source['screenshot_url'] }}" alt="{{ source['name'] }} の最新サムネイル">
+                                        {% else %}
+                                            <div class="thumbnail-placeholder">
+                                                まだサムネイルはありません。<br>
+                                                差分チェック実行後に最新画面を表示します。
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                    {% if source["screenshot_error"] %}
+                                        <div class="thumbnail-note thumbnail-error">{{ source["screenshot_error"] }}</div>
+                                    {% elif source["has_screenshot"] %}
+                                        <div class="thumbnail-note">サムネイル更新: {{ source["screenshot_updated_at"] or "取得済み" }}</div>
+                                    {% endif %}
                                 </div>
 
                                 <div class="diff-box">

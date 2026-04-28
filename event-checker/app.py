@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,8 +14,11 @@ from difflib import ndiff
 BASE_DIR = Path(__file__).resolve().parent
 SOURCES_FILE = Path(os.environ.get("SOURCES_PATH", BASE_DIR / "sources.json"))
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_PATH", BASE_DIR / "settings.json"))
+SCREENSHOT_DIR = BASE_DIR / "static" / "screenshots"
 REQUEST_TIMEOUT = 15
 EXPORT_FORMAT_VERSION = 1
+SCREENSHOT_TIMEOUT_MS = 30_000
+SCREENSHOT_WAIT_MS = 1_500
 EXCLUDE_KEYWORDS = [
     "Copyright",
     "All Rights Reserved",
@@ -45,6 +49,8 @@ def normalize_source(source):
         "last_diff": [str(line).strip() for line in source.get("last_diff", []) if str(line).strip()],
         # Internal snapshot storage is required to calculate future diffs.
         "last_text": str(source.get("last_text", "")),
+        "screenshot_updated_at": str(source.get("screenshot_updated_at", "")).strip(),
+        "screenshot_error": str(source.get("screenshot_error", "")).strip(),
     }
 
 
@@ -100,6 +106,42 @@ def save_settings(settings):
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with SETTINGS_FILE.open("w", encoding="utf-8") as file:
         json.dump(settings, file, ensure_ascii=False, indent=2)
+
+
+def build_screenshot_filename(url):
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return f"{digest[:20]}.png"
+
+
+def get_screenshot_relative_path(url):
+    return f"screenshots/{build_screenshot_filename(url)}"
+
+
+def get_screenshot_file_path(url):
+    return SCREENSHOT_DIR / build_screenshot_filename(url)
+
+
+def has_screenshot(url):
+    return get_screenshot_file_path(url).exists()
+
+
+def enrich_sources_for_display(sources):
+    enriched_sources = []
+    for source in sources:
+        screenshot_path = get_screenshot_relative_path(source["url"])
+        screenshot_updated_at = source.get("screenshot_updated_at") or source.get("last_checked") or ""
+        enriched_source = dict(source)
+        enriched_source["screenshot_path"] = screenshot_path
+        enriched_source["has_screenshot"] = has_screenshot(source["url"])
+        enriched_source["screenshot_updated_at"] = screenshot_updated_at
+        enriched_source["screenshot_url"] = url_for(
+            "static",
+            filename=screenshot_path,
+            v=screenshot_updated_at,
+        )
+        enriched_sources.append(enriched_source)
+
+    return enriched_sources
 
 
 def fetch_page_text(url):
@@ -166,6 +208,79 @@ def ensure_sources_file():
 def ensure_settings_file():
     if not SETTINGS_FILE.exists():
         save_settings({"priority_keywords": DEFAULT_PRIORITY_KEYWORDS})
+
+
+def capture_page_screenshot(url, destination):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if _capture_with_python_playwright(url, destination):
+        return
+    _capture_with_npx_playwright(url, destination)
+
+
+def _capture_with_python_playwright(url, destination):
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 1600}, locale="ja-JP")
+            page.goto(url, wait_until="domcontentloaded", timeout=SCREENSHOT_TIMEOUT_MS)
+            page.wait_for_timeout(SCREENSHOT_WAIT_MS)
+            page.screenshot(path=str(destination), full_page=False)
+            browser.close()
+        return True
+    except PlaywrightError as error:
+        raise RuntimeError(f"ブラウザ撮影に失敗しました: {error}") from error
+
+
+def _capture_with_npx_playwright(url, destination):
+    try:
+        subprocess.run(
+            [
+                "npx",
+                "playwright",
+                "screenshot",
+                "--browser",
+                "chromium",
+                "--viewport-size",
+                "1280,1600",
+                "--wait-for-timeout",
+                str(SCREENSHOT_WAIT_MS),
+                "--timeout",
+                str(SCREENSHOT_TIMEOUT_MS),
+                "--ignore-https-errors",
+                url,
+                str(destination),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("Playwright 実行環境が見つかりません。") from error
+    except subprocess.CalledProcessError as error:
+        stderr = (error.stderr or "").strip()
+        stdout = (error.stdout or "").strip()
+        detail = stderr or stdout or str(error)
+        raise RuntimeError(f"ブラウザ撮影に失敗しました: {detail}") from error
+
+
+def remove_screenshot(url):
+    screenshot_file = get_screenshot_file_path(url)
+    if screenshot_file.exists():
+        screenshot_file.unlink()
+
+
+def cleanup_orphan_screenshots(sources):
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    expected_files = {build_screenshot_filename(source["url"]) for source in sources}
+    for screenshot_file in SCREENSHOT_DIR.glob("*.png"):
+        if screenshot_file.name not in expected_files:
+            screenshot_file.unlink()
 
 
 def build_export_payload():
@@ -252,7 +367,7 @@ def build_status_message(requested_status):
 def index():
     ensure_sources_file()
     ensure_settings_file()
-    sources = load_sources()
+    sources = enrich_sources_for_display(load_sources())
     settings = load_settings()
     message = build_status_message(request.args.get("status", ""))
     return render_template(
@@ -285,6 +400,8 @@ def add_source():
             "last_hash": "",
             "last_diff": [],
             "last_text": "",
+            "screenshot_updated_at": "",
+            "screenshot_error": "",
         }
     )
     save_sources(sources)
@@ -301,6 +418,7 @@ def delete_source():
     updated_sources = [source for source in sources if source["url"] != url]
 
     if len(updated_sources) != len(sources):
+        remove_screenshot(url)
         save_sources(updated_sources)
         return redirect(url_for("index", status="deleted"))
 
@@ -360,6 +478,7 @@ def import_data():
 
     save_sources(imported_sources)
     save_settings(imported_settings)
+    cleanup_orphan_screenshots(imported_sources)
     return redirect(url_for("index", status="imported"))
 
 
@@ -396,6 +515,13 @@ def check_sources():
         except Exception as error:  # noqa: BLE001
             source["last_checked"] = checked_at
             source["last_diff"] = [f"処理エラー: {error}"]
+
+        try:
+            capture_page_screenshot(source["url"], get_screenshot_file_path(source["url"]))
+            source["screenshot_updated_at"] = checked_at
+            source["screenshot_error"] = ""
+        except Exception as error:  # noqa: BLE001
+            source["screenshot_error"] = str(error)
 
     save_sources(sources)
     return redirect(url_for("index", status="checked"))
