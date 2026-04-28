@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: free
     rootDir: event-checker
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     autoDeployTrigger: commit
     healthCheckPath: /

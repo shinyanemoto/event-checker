@@ -154,31 +154,6 @@
             background: #171717;
         }
 
-        .ghost-button {
-            display: inline-flex;
-            justify-content: center;
-            align-items: center;
-            text-decoration: none;
-            background: transparent;
-            color: var(--accent-dark);
-            border: 1px solid rgba(151, 70, 38, 0.25);
-        }
-
-        .ghost-button:hover {
-            background: #f8eee7;
-            transform: translateY(-1px);
-        }
-
-        .danger-button {
-            background: #8f3d32;
-            padding: 10px 16px;
-            font-size: 0.92rem;
-        }
-
-        .danger-button:hover {
-            background: #6f2b22;
-        }
-
         .keyword-list {
             display: flex;
             flex-wrap: wrap;
@@ -234,49 +209,6 @@
             color: var(--muted);
             font-size: 0.9rem;
             line-height: 1.6;
-        }
-
-        .thumbnail-block {
-            margin-top: 14px;
-        }
-
-        .thumbnail-frame {
-            overflow: hidden;
-            border-radius: 18px;
-            border: 1px solid var(--line);
-            background:
-                linear-gradient(135deg, rgba(195, 95, 59, 0.08), rgba(255, 255, 255, 0.96));
-        }
-
-        .thumbnail-image {
-            display: block;
-            width: 100%;
-            height: 220px;
-            object-fit: cover;
-            object-position: top center;
-        }
-
-        .thumbnail-placeholder {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 160px;
-            padding: 20px;
-            color: var(--muted);
-            line-height: 1.7;
-            text-align: center;
-        }
-
-        .thumbnail-note {
-            margin-top: 10px;
-            color: var(--muted);
-            font-size: 0.88rem;
-            line-height: 1.6;
-        }
-
-        .thumbnail-error {
-            color: #8f3d32;
-            font-weight: 700;
         }
 
         .diff-box {
@@ -340,7 +272,7 @@
             <h1>URLを登録して、差分をまとめて確認できるシンプル管理ページ</h1>
             <p class="lead">
                 登録したページをまとめてチェックし、追加された重要そうな行だけを見やすく表示します。
-                JSONベースなので構成もシンプルです。
+                登録URLと重要キーワードはGit管理のJSONファイルから読み込みます。
             </p>
             {% if message %}
                 <div class="message">{{ message }}</div>
@@ -349,29 +281,12 @@
 
         <section class="actions">
             <div class="card">
-                <h2>URL登録</h2>
-                <form method="POST" action="/add">
-                    <div>
-                        <label for="name">名前</label>
-                        <input id="name" name="name" type="text" placeholder="例: TJKイベント" required>
-                    </div>
-                    <div>
-                        <label for="url">URL</label>
-                        <input id="url" name="url" type="url" placeholder="https://example.com" required>
-                    </div>
-                    <button type="submit">登録する</button>
-                </form>
-            </div>
-
-            <div class="card">
-                <h2>重要キーワード登録</h2>
-                <form method="POST" action="/keywords/add">
-                    <div>
-                        <label for="keyword">重要キーワード</label>
-                        <input id="keyword" name="keyword" type="text" placeholder="例: 先着" required>
-                    </div>
-                    <button type="submit">追加する</button>
-                </form>
+                <h2>設定ファイル</h2>
+                <p class="empty">
+                    登録URLは <strong>{{ config_sources_path }}</strong>、
+                    重要キーワードは <strong>{{ config_settings_path }}</strong> で管理します。
+                    内容を変えたいときはJSONを書き換えてGitに反映してください。
+                </p>
                 <div class="meta">
                     現在の優先キーワード
                 </div>
@@ -390,24 +305,6 @@
                 </p>
                 <form method="POST" action="/check">
                     <button class="secondary-button" type="submit">チェック実行</button>
-                </form>
-            </div>
-
-            <div class="card">
-                <h2>JSONインポート / エクスポート</h2>
-                <p class="empty">
-                    現在のURL一覧と重要キーワードをJSONでバックアップできます。
-                    エクスポートしたJSONはそのまま再インポート可能です。
-                </p>
-                <form method="GET" action="/export">
-                    <button class="ghost-button" type="submit">JSONをエクスポート</button>
-                </form>
-                <form method="POST" action="/import" enctype="multipart/form-data">
-                    <div>
-                        <label for="import_file">インポートするJSONファイル</label>
-                        <input id="import_file" name="import_file" type="file" accept=".json,application/json" required>
-                    </div>
-                    <button type="submit">JSONをインポート</button>
                 </form>
             </div>
         </section>
@@ -429,32 +326,10 @@
                                         <h3 class="source-title">■ {{ source["name"] }}</h3>
                                         <a class="source-link" href="{{ source['url'] }}" target="_blank" rel="noopener noreferrer">{{ source["url"] }}</a>
                                     </div>
-                                    <form method="POST" action="/delete">
-                                        <input type="hidden" name="url" value="{{ source['url'] }}">
-                                        <button class="danger-button" type="submit">削除</button>
-                                    </form>
                                 </div>
                                 <div class="meta">
                                     最終チェック: {{ source["last_checked"] or "未実行" }}<br>
                                     ハッシュ: {{ source["last_hash"][:12] ~ "..." if source["last_hash"] else "未生成" }}
-                                </div>
-
-                                <div class="thumbnail-block">
-                                    <div class="thumbnail-frame">
-                                        {% if source["has_screenshot"] %}
-                                            <img class="thumbnail-image" src="{{ source['screenshot_url'] }}" alt="{{ source['name'] }} の最新サムネイル">
-                                        {% else %}
-                                            <div class="thumbnail-placeholder">
-                                                まだサムネイルはありません。<br>
-                                                差分チェック実行後に最新画面を表示します。
-                                            </div>
-                                        {% endif %}
-                                    </div>
-                                    {% if source["screenshot_error"] %}
-                                        <div class="thumbnail-note thumbnail-error">{{ source["screenshot_error"] }}</div>
-                                    {% elif source["has_screenshot"] %}
-                                        <div class="thumbnail-note">サムネイル更新: {{ source["screenshot_updated_at"] or "取得済み" }}</div>
-                                    {% endif %}
                                 </div>
 
                                 <div class="diff-box">
