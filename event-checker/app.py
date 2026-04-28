@@ -14,6 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 SOURCES_FILE = Path(os.environ.get("SOURCES_PATH", BASE_DIR / "sources.json"))
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_PATH", BASE_DIR / "settings.json"))
 REQUEST_TIMEOUT = 15
+EXPORT_FORMAT_VERSION = 1
 EXCLUDE_KEYWORDS = [
     "Copyright",
     "All Rights Reserved",
@@ -31,6 +32,35 @@ DEFAULT_PRIORITY_KEYWORDS = [
 app = Flask(__name__)
 
 
+class ImportValidationError(ValueError):
+    pass
+
+
+def normalize_source(source):
+    return {
+        "name": str(source.get("name", "")).strip(),
+        "url": str(source.get("url", "")).strip(),
+        "last_checked": str(source.get("last_checked", "")).strip(),
+        "last_hash": str(source.get("last_hash", "")).strip(),
+        "last_diff": [str(line).strip() for line in source.get("last_diff", []) if str(line).strip()],
+        # Internal snapshot storage is required to calculate future diffs.
+        "last_text": str(source.get("last_text", "")),
+    }
+
+
+def clean_priority_keywords(priority_keywords):
+    cleaned_keywords = []
+    for keyword in priority_keywords:
+        normalized = str(keyword).strip()
+        if normalized and normalized not in cleaned_keywords:
+            cleaned_keywords.append(normalized)
+
+    if not cleaned_keywords:
+        cleaned_keywords = DEFAULT_PRIORITY_KEYWORDS.copy()
+
+    return cleaned_keywords
+
+
 def load_sources():
     if not SOURCES_FILE.exists():
         save_sources([])
@@ -42,21 +72,7 @@ def load_sources():
     except (json.JSONDecodeError, OSError):
         sources = []
 
-    normalized_sources = []
-    for source in sources:
-        normalized_sources.append(
-            {
-                "name": source.get("name", "").strip(),
-                "url": source.get("url", "").strip(),
-                "last_checked": source.get("last_checked", ""),
-                "last_hash": source.get("last_hash", ""),
-                "last_diff": source.get("last_diff", []),
-                # Internal snapshot storage is required to calculate future diffs.
-                "last_text": source.get("last_text", ""),
-            }
-        )
-
-    return normalized_sources
+    return [normalize_source(source) for source in sources]
 
 
 def save_sources(sources):
@@ -77,16 +93,7 @@ def load_settings():
         settings = {}
 
     priority_keywords = settings.get("priority_keywords", DEFAULT_PRIORITY_KEYWORDS)
-    cleaned_keywords = []
-    for keyword in priority_keywords:
-        normalized = str(keyword).strip()
-        if normalized and normalized not in cleaned_keywords:
-            cleaned_keywords.append(normalized)
-
-    if not cleaned_keywords:
-        cleaned_keywords = DEFAULT_PRIORITY_KEYWORDS.copy()
-
-    return {"priority_keywords": cleaned_keywords}
+    return {"priority_keywords": clean_priority_keywords(priority_keywords)}
 
 
 def save_settings(settings):
@@ -161,6 +168,69 @@ def ensure_settings_file():
         save_settings({"priority_keywords": DEFAULT_PRIORITY_KEYWORDS})
 
 
+def build_export_payload():
+    return {
+        "format": "event-checker-export",
+        "version": EXPORT_FORMAT_VERSION,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "sources": load_sources(),
+        "settings": load_settings(),
+    }
+
+
+def parse_import_payload(raw_payload):
+    if isinstance(raw_payload, list):
+        imported_sources = validate_sources(raw_payload)
+        return imported_sources, load_settings()
+
+    if not isinstance(raw_payload, dict):
+        raise ImportValidationError("JSONの形式が不正です。")
+
+    if "sources" in raw_payload:
+        imported_sources = validate_sources(raw_payload.get("sources", []))
+        imported_settings = validate_settings(raw_payload.get("settings", {}))
+        return imported_sources, imported_settings
+
+    if "priority_keywords" in raw_payload:
+        return load_sources(), validate_settings(raw_payload)
+
+    raise ImportValidationError("読み込めるJSON形式ではありません。")
+
+
+def validate_sources(raw_sources):
+    if not isinstance(raw_sources, list):
+        raise ImportValidationError("sources は配列で指定してください。")
+
+    normalized_sources = []
+    seen_urls = set()
+
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            raise ImportValidationError("sources の各要素はオブジェクトで指定してください。")
+
+        normalized_source = normalize_source(raw_source)
+        if not normalized_source["name"] or not normalized_source["url"]:
+            raise ImportValidationError("各URLデータには name と url が必要です。")
+        if normalized_source["url"] in seen_urls:
+            raise ImportValidationError("同じURLが複数含まれています。")
+
+        seen_urls.add(normalized_source["url"])
+        normalized_sources.append(normalized_source)
+
+    return normalized_sources
+
+
+def validate_settings(raw_settings):
+    if not isinstance(raw_settings, dict):
+        raise ImportValidationError("settings はオブジェクトで指定してください。")
+
+    return {
+        "priority_keywords": clean_priority_keywords(
+            raw_settings.get("priority_keywords", DEFAULT_PRIORITY_KEYWORDS)
+        )
+    }
+
+
 def build_status_message(requested_status):
     status_map = {
         "added": "URLを登録しました。",
@@ -171,6 +241,9 @@ def build_status_message(requested_status):
         "keyword_added": "重要キーワードを追加しました。",
         "keyword_empty": "重要キーワードを入力してください。",
         "keyword_duplicate": "同じ重要キーワードはすでに登録されています。",
+        "imported": "JSONをインポートしました。",
+        "import_empty": "インポートするJSONファイルを選択してください。",
+        "import_invalid": "JSONの読み込みに失敗しました。形式を確認してください。",
     }
     return status_map.get(requested_status, "")
 
@@ -249,6 +322,45 @@ def add_keyword():
     settings["priority_keywords"].append(keyword)
     save_settings(settings)
     return redirect(url_for("index", status="keyword_added"))
+
+
+@app.route("/export", methods=["GET"])
+def export_data():
+    ensure_sources_file()
+    ensure_settings_file()
+
+    payload = build_export_payload()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    response_body = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    return app.response_class(
+        response=response_body,
+        mimetype="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="event-checker-export-{timestamp}.json"'
+        },
+    )
+
+
+@app.route("/import", methods=["POST"])
+def import_data():
+    ensure_sources_file()
+    ensure_settings_file()
+
+    uploaded_file = request.files.get("import_file")
+    if uploaded_file is None or not uploaded_file.filename:
+        return redirect(url_for("index", status="import_empty"))
+
+    try:
+        raw_text = uploaded_file.read().decode("utf-8")
+        raw_payload = json.loads(raw_text)
+        imported_sources, imported_settings = parse_import_payload(raw_payload)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ImportValidationError):
+        return redirect(url_for("index", status="import_invalid"))
+
+    save_sources(imported_sources)
+    save_settings(imported_settings)
+    return redirect(url_for("index", status="imported"))
 
 
 @app.route("/check", methods=["POST"])

@@ -154,6 +154,21 @@
             background: #171717;
         }
 
+        .ghost-button {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            text-decoration: none;
+            background: transparent;
+            color: var(--accent-dark);
+            border: 1px solid rgba(151, 70, 38, 0.25);
+        }
+
+        .ghost-button:hover {
+            background: #f8eee7;
+            transform: translateY(-1px);
+        }
+
         .danger-button {
             background: #8f3d32;
             padding: 10px 16px;
@@ -332,6 +347,24 @@
                 </p>
                 <form method="POST" action="/check">
                     <button class="secondary-button" type="submit">チェック実行</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>JSONインポート / エクスポート</h2>
+                <p class="empty">
+                    現在のURL一覧と重要キーワードをJSONでバックアップできます。
+                    エクスポートしたJSONはそのまま再インポート可能です。
+                </p>
+                <form method="GET" action="/export">
+                    <button class="ghost-button" type="submit">JSONをエクスポート</button>
+                </form>
+                <form method="POST" action="/import" enctype="multipart/form-data">
+                    <div>
+                        <label for="import_file">インポートするJSONファイル</label>
+                        <input id="import_file" name="import_file" type="file" accept=".json,application/json" required>
+                    </div>
+                    <button type="submit">JSONをインポート</button>
                 </form>
             </div>
         </section>
