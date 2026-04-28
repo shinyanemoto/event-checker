@@ -7,7 +7,7 @@ from flask import Flask, redirect, render_template, request, url_for
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE = BASE_DIR / "db.sqlite3"
+DATABASE = Path(os.environ.get("DATABASE_PATH", BASE_DIR / "db.sqlite3"))
 
 app = Flask(__name__)
 
